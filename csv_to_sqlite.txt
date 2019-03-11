@@ -1,0 +1,133 @@
+
+'''
+This program is to read 1,000,000 lines of ratings csv file, in multiple threads and stop once 1 million lines are read.
+Then parse the format and insert into a sqlite db using SQLAlchemy
+
+'''
+
+from sqlalchemy import Column, Integer, Float, Date, String, sql, text, select
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+import datetime,sqlite3
+import multiprocessing as mp
+
+
+Base = declarative_base()
+
+class Ratings(Base):
+    #Tell SQLAlchemy what the table name is and if there's any table-specific arguments it should know about
+    __tablename__ = 'Ratings'
+    __table_args__ = {'sqlite_autoincrement': True}
+    #tell SQLAlchemy the name of column and its attributes:
+    id = Column(Integer, primary_key=True, nullable=False)
+    userid = Column(String)
+    movieid = Column(String)
+    rating = Column(String)
+    timestamp = Column(String)
+
+#Create the database
+engine = create_engine('sqlite:///ratings_test.db')
+Base.metadata.create_all(engine)
+
+#Create the session
+session = sessionmaker()
+session.configure(bind=engine)
+s = session()
+
+def write_to_db(proc):
+    #Create the session
+    session = sessionmaker()
+    session.configure(bind=engine)
+    s = session()
+    try:
+        print(proc)
+        for i in range(1,len(proc[0])):
+            record = Ratings(**{
+                # 'userid': datetime.datetime.strptime(row[0], '%d/%m/%Y %H:%M').date(),
+                'userid': proc[0][i].split(',')[0],
+                'movieid': proc[0][i].split(',')[1],
+                'rating': proc[0][i].split(',')[2],
+                'timestamp': proc[0][i].split(',')[3]
+            })
+            s.add(record)
+        s.commit()  # Attempt to commit all the records
+    except Exception as e:
+        print(e)
+        s.rollback()  # Rollback the changes on error
+    finally:
+        s.close()
+
+
+def create_connection(db_file):
+    #create a database connection to the SQLite database
+    try:
+        conn = sqlite3.connect(db_file)
+        return conn
+    except Exception as e:
+        print(e)
+
+# process file function
+def processfile(filename, start=0, stop=0):
+    results1 = []
+    if start == 0 and stop == 0:
+        print ("do nothing")
+    else:
+        with open(filename, 'r') as fh:
+            fh.seek(start)
+            lines = fh.readlines(stop - start)
+            results1.append(lines)
+    return results1
+
+import os
+
+if __name__ == "__main__":
+    filename = r"C:\Users\Vamsi.Narsupalli\PycharmProjects\TestProject\ratings.csv"
+    # get file size and set chuck size
+    filesize = os.path.getsize(filename)
+    split_size = 1024
+
+    # determine if it needs to be split
+    if filesize > split_size:
+
+        # create pool, initialize chunk start location (cursor)
+        pool = mp.Pool(12)
+        cursor = 0
+        results = []
+        with open(filename, 'r') as fh:
+
+            # for every chunk in the file...
+            for chunk in range(filesize // split_size):
+
+                # determine where the chunk ends, is it the last one?
+                if cursor + split_size > filesize:
+                    end = filesize
+                else:
+                    end = cursor + split_size
+
+                # seek to end of chunk and read next line to ensure you
+                # pass entire lines to the processfile function
+                fh.seek(end)
+                fh.readline()
+
+                # get current file location
+                end = fh.tell()
+
+                # add chunk to process pool, save reference to get results
+                proc = pool.apply_async(processfile, args=[filename, cursor, end])
+                results.append(proc)
+                # setup next chunk
+                cursor = end
+
+        # close and wait for pool to finish
+        pool.close()
+        pool.join()
+
+        # iterate through results
+        for proc in results:
+            processfile_result = proc.get()
+            write_to_db(processfile_result)
+            print ("processfile_result:"+str(processfile_result))
+
+    else:
+        print ("file size less than the split size")
